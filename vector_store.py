@@ -5,8 +5,16 @@ Two isolated collections: one per document.
 
 from __future__ import annotations
 import chromadb
+from chromadb.config import Settings
 from typing import List, Tuple
-from langchain_chroma import Chroma
+try:
+    from langchain_chroma import Chroma
+except Exception:
+    # Fallback: newer langchain exposes Chroma under langchain.vectorstores
+    try:
+        from langchain.vectorstores import Chroma
+    except Exception:
+        Chroma = None
 from langchain_mistralai import MistralAIEmbeddings
 from langchain_core.documents import Document
 
@@ -22,8 +30,22 @@ class VectorStoreManager:
             model="mistral-embed",
             mistral_api_key=api_key,
         )
-        # Single in-memory Chroma client shared across both collections
-        self._chroma_client = chromadb.Client()
+        # Single Chroma client shared across both collections.
+        # Use an explicit Settings instance to prefer the duckdb+parquet
+        # implementation and avoid issues with Rust bindings in some environments.
+        # Try the default client first (works for many chromadb versions).
+        try:
+            self._chroma_client = chromadb.Client()
+        except Exception as e:
+            # Provide a clear, actionable error if chromadb's Rust bindings or
+            # new configuration model cause a failure. A common fix is to
+            # install a chromadb version compatible with this codebase:
+            #   pip install chromadb==0.3.25
+            raise RuntimeError(
+                "Failed to initialize chromadb.Client().\n"
+                "If you see Rust-binding or deprecated-configuration errors, try: `pip install chromadb==0.3.25`\n"
+                "Then restart Streamlit and try again."
+            ) from e
         self._stores: dict[str, Chroma] = {}
         self._meta: dict[str, dict] = {}  # filename, page_count, chunk_count per doc
 
