@@ -72,6 +72,11 @@ User Query ─────────►│  Thought: "Let me first get      �
 
 ```bash
 pip install -r requirements.txt
+python -m pip install pdfplumber
+python -m pip install langchain-mistralai langchain-chroma
+# If you encounter chromadb / OpenTelemetry import errors, pin these versions:
+# python -m pip install opentelemetry-api==1.41.1 opentelemetry-sdk==1.41.1 opentelemetry-exporter-otlp-proto-grpc==1.41.1
+
 streamlit run app.py
 ```
 
@@ -96,25 +101,4 @@ doc_compare_agent/
 
 ---
 
-## CV / Interview Line
 
-> *"Built an agentic document comparison system using LangGraph's ReAct framework —
-> the agent autonomously selects from 6 custom LangChain tools, performs multi-step
-> reasoning across two ChromaDB vector stores, and streams its decision-making
-> process live in Streamlit."*
-
-### Interview talking points
-
-1. **ReAct pattern** — Reasoning + Acting loop, agent decides tool order dynamically
-2. **Multi-query refinement** — agent searches with different angles (e.g. find_conflicts uses 3 sub-queries internally)
-3. **Streaming reasoning** — live Thought / Tool Call / Observation display shows the agent "thinking"
-4. **Tool specialisation** — compare_topic vs find_conflicts vs find_common_ground for different query types
-5. **LangGraph over LangChain Agents** — more stable, better streaming, production-ready
-6. **Two isolated ChromaDB collections** — prevents cross-doc contamination
-
-### Business use cases (say these in interviews)
-- Legal: compare contract versions, spot conflicting clauses
-- Research: compare two papers, find where they agree/disagree on findings
-- Compliance: compare policy document vs regulation for gaps
-- Finance: compare two analyst reports on the same company
-- Medical: compare treatment guidelines from two institutions
