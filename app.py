@@ -10,6 +10,31 @@ from pdf_processor import extract_langchain_docs
 from vector_store import VectorStoreManager
 from agent import DocumentComparisonAgent
 
+# Live in-memory cache for non-serializable objects (avoid storing these in st.session_state)
+LIVE: dict = {}
+
+
+def _get_store_and_agent():
+    """Return (store, agent), creating them from the API key if needed.
+
+    We keep these in the module-level LIVE dict because some objects (Chroma
+    clients, LLM wrappers) are not reliably serializable by Streamlit's
+    session state across reruns.
+    """
+    store = LIVE.get("store")
+    agent = LIVE.get("agent")
+    if store and agent:
+        return store, agent
+
+    api_key = st.session_state.get("mistral_api_key") or os.environ.get("MISTRAL_API_KEY")
+    model = st.session_state.get("model", "mistral-large-latest")
+    if api_key:
+        store = VectorStoreManager(api_key)
+        agent = DocumentComparisonAgent(api_key, model)
+        LIVE["store"] = store
+        LIVE["agent"] = agent
+    return store, agent
+
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="DocAgent AI",
@@ -171,9 +196,9 @@ with st.sidebar:
 
     if api_key:
         os.environ["MISTRAL_API_KEY"] = api_key
-        if st.session_state["store"] is None:
-            st.session_state["store"] = VectorStoreManager(api_key)
-            st.session_state["agent"] = DocumentComparisonAgent(api_key, model)
+        st.session_state["mistral_api_key"] = api_key
+        # Create live objects (kept outside session_state)
+        _get_store_and_agent()
         st.success("✓ Connected to Mistral", icon="🔑")
 
     st.divider()
@@ -203,8 +228,7 @@ st.divider()
 
 # ── Upload columns ─────────────────────────────────────────────────────────────
 def ingest_pdf(file, doc_key: str):
-    store: VectorStoreManager = st.session_state["store"]
-    agent: DocumentComparisonAgent = st.session_state["agent"]
+    store, agent = _get_store_and_agent()
     pdf_bytes = file.read()
     with st.spinner(f"Embedding {file.name}…"):
         docs = extract_langchain_docs(pdf_bytes, doc_key)
@@ -240,7 +264,8 @@ with col_a:
         </div>""", unsafe_allow_html=True)
 
     fa = st.file_uploader("Upload Document A", type=["pdf"], key="up_a", label_visibility="collapsed")
-    if fa and st.session_state["store"]:
+    store, _ = _get_store_and_agent()
+    if fa and store:
         ingest_pdf(fa, "doc_a")
         st.rerun()
     elif fa:
@@ -259,7 +284,8 @@ with col_b:
         </div>""", unsafe_allow_html=True)
 
     fb = st.file_uploader("Upload Document B", type=["pdf"], key="up_b", label_visibility="collapsed")
-    if fb and st.session_state["store"]:
+    store, _ = _get_store_and_agent()
+    if fb and store:
         ingest_pdf(fb, "doc_b")
         st.rerun()
     elif fb:
@@ -295,9 +321,10 @@ query = st.text_area(
 )
 
 both_ready = st.session_state["doc_a_ready"] and st.session_state["doc_b_ready"]
+_, agent = _get_store_and_agent()
 run = st.button(
     "🚀 Run Agent",
-    disabled=not (both_ready and query and st.session_state["agent"]),
+    disabled=not (both_ready and query and agent),
     use_container_width=True,
 )
 
@@ -307,10 +334,10 @@ if not both_ready:
 
 # ── Agent execution with live step rendering ───────────────────────────────────
 if run and query and both_ready:
-    agent: DocumentComparisonAgent = st.session_state["agent"]
+    store, agent = _get_store_and_agent()
     # Re-configure in case top_k changed
     agent.configure(
-        st.session_state["store"],
+        store,
         st.session_state["doc_a_name"],
         st.session_state["doc_b_name"],
         top_k,
