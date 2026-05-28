@@ -265,10 +265,10 @@ with col_a:
 
     fa = st.file_uploader("Upload Document A", type=["pdf"], key="up_a", label_visibility="collapsed")
     store, _ = _get_store_and_agent()
-    if fa and store:
+    if fa and store and not st.session_state["doc_a_ready"]:
         ingest_pdf(fa, "doc_a")
         st.rerun()
-    elif fa:
+    elif fa and not store:
         st.warning("Set Mistral API key first.")
 
 with col_b:
@@ -285,10 +285,10 @@ with col_b:
 
     fb = st.file_uploader("Upload Document B", type=["pdf"], key="up_b", label_visibility="collapsed")
     store, _ = _get_store_and_agent()
-    if fb and store:
+    if fb and store and not st.session_state["doc_b_ready"]:
         ingest_pdf(fb, "doc_b")
         st.rerun()
-    elif fb:
+    elif fb and not store:
         st.warning("Set Mistral API key first.")
 
 st.divider()
