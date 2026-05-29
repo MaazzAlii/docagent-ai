@@ -4,7 +4,7 @@ pdf_processor.py  ·  Extract + chunk PDFs with page-level metadata
 
 import io
 import re
-from typing import List, Dict
+from typing import List
 import pdfplumber
 from langchain_core.documents import Document
 

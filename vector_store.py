@@ -5,12 +5,10 @@ Two isolated collections: one per document.
 
 from __future__ import annotations
 import chromadb
-from chromadb.config import Settings
 from typing import List, Tuple
 try:
     from langchain_chroma import Chroma
 except Exception:
-    # Fallback: newer langchain exposes Chroma under langchain.vectorstores
     try:
         from langchain.vectorstores import Chroma
     except Exception:
@@ -30,24 +28,15 @@ class VectorStoreManager:
             model="mistral-embed",
             mistral_api_key=api_key,
         )
-        # Single Chroma client shared across both collections.
-        # Use an explicit Settings instance to prefer the duckdb+parquet
-        # implementation and avoid issues with Rust bindings in some environments.
-        # Try the default client first (works for many chromadb versions).
+        # FIX: Removed deprecated Settings import — use EphemeralClient for in-memory
         try:
+            self._chroma_client = chromadb.EphemeralClient()
+        except AttributeError:
+            # Fallback for older chromadb
             self._chroma_client = chromadb.Client()
-        except Exception as e:
-            # Provide a clear, actionable error if chromadb's Rust bindings or
-            # new configuration model cause a failure. A common fix is to
-            # install a chromadb version compatible with this codebase:
-            #   pip install chromadb==0.3.25
-            raise RuntimeError(
-                "Failed to initialize chromadb.Client().\n"
-                "If you see Rust-binding or deprecated-configuration errors, try: `pip install chromadb==0.3.25`\n"
-                "Then restart Streamlit and try again."
-            ) from e
+
         self._stores: dict[str, Chroma] = {}
-        self._meta: dict[str, dict] = {}  # filename, page_count, chunk_count per doc
+        self._meta: dict[str, dict] = {}
 
     # ── Ingestion ──────────────────────────────────────────────────────────── #
 
@@ -59,7 +48,6 @@ class VectorStoreManager:
         """
         collection_name = f"agent_{doc_key}"
 
-        # Wipe existing collection for this key (handles re-uploads)
         try:
             self._chroma_client.delete_collection(collection_name)
         except Exception:
@@ -81,7 +69,7 @@ class VectorStoreManager:
         }
         return len(docs)
 
-    # ── Retrieval ──────────────────────────────────────────────────────────── #
+    # ── Retrieval ─────────────────────────────────────────────────────────── #
 
     def search(self, doc_key: str, query: str, k: int = 5) -> List[Document]:
         """Semantic search within a single document collection."""
@@ -103,7 +91,7 @@ class VectorStoreManager:
         """Search both collections simultaneously."""
         return self.search("doc_a", query, k), self.search("doc_b", query, k)
 
-    # ── Helpers ────────────────────────────────────────────────────────────── #
+    # ── Helpers ───────────────────────────────────────────────────────────── #
 
     def is_ready(self, doc_key: str) -> bool:
         return doc_key in self._stores

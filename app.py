@@ -4,23 +4,16 @@ Run:  streamlit run app.py
 """
 
 import os
-import time
 import streamlit as st
 from pdf_processor import extract_langchain_docs
 from vector_store import VectorStoreManager
 from agent import DocumentComparisonAgent
 
-# Live in-memory cache for non-serializable objects (avoid storing these in st.session_state)
+# Live in-memory cache for non-serializable objects
 LIVE: dict = {}
 
 
 def _get_store_and_agent():
-    """Return (store, agent), creating them from the API key if needed.
-
-    We keep these in the module-level LIVE dict because some objects (Chroma
-    clients, LLM wrappers) are not reliably serializable by Streamlit's
-    session state across reruns.
-    """
     store = LIVE.get("store")
     agent = LIVE.get("agent")
     if store and agent:
@@ -35,6 +28,7 @@ def _get_store_and_agent():
         LIVE["agent"] = agent
     return store, agent
 
+
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="DocAgent AI",
@@ -43,7 +37,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── CSS ────────────────────────────────────────────────────────────────────────
+# ── CSS ─────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Sora:wght@300;400;600;700&display=swap');
@@ -54,7 +48,6 @@ html, body, [class*="css"] { font-family: 'Sora', sans-serif; }
 
 h1, h2, h3, code { font-family: 'JetBrains Mono', monospace !important; }
 
-/* Step cards */
 .step-thought {
     background: #0d1117;
     border-left: 3px solid #f0c040;
@@ -117,11 +110,11 @@ h1, h2, h3, code { font-family: 'JetBrains Mono', monospace !important; }
     letter-spacing: .06em;
     text-transform: uppercase;
 }
-.badge-a   { background: #112244; color: #4488ff; }
-.badge-b   { background: #331144; color: #bb66ff; }
-.badge-ok  { background: #0d2d1a; color: #33cc77; }
+.badge-a    { background: #112244; color: #4488ff; }
+.badge-b    { background: #331144; color: #bb66ff; }
+.badge-ok   { background: #0d2d1a; color: #33cc77; }
 .badge-agent{ background: #1a1200; color: #ffcc33; }
-.doc-card  {
+.doc-card {
     background: #0d1117;
     border: 1px solid #161b27;
     border-radius: 10px;
@@ -159,15 +152,16 @@ h1, h2, h3, code { font-family: 'JetBrains Mono', monospace !important; }
 """, unsafe_allow_html=True)
 
 
-# ── Session state ──────────────────────────────────────────────────────────────
+# ── Session state ─────────────────────────────────────────────────────────────
 def _init():
     defs = {
-        "store": None, "agent": None,
         "doc_a_ready": False, "doc_b_ready": False,
         "doc_a_name": "", "doc_b_name": "",
         "doc_a_meta": {}, "doc_b_meta": {},
         "history": [],
         "current_query": "",
+        "mistral_api_key": "",
+        "model": "mistral-large-latest",
     }
     for k, v in defs.items():
         if k not in st.session_state:
@@ -176,7 +170,7 @@ def _init():
 _init()
 
 
-# ── Sidebar ────────────────────────────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🤖 DocAgent AI")
     st.markdown(
@@ -187,36 +181,28 @@ with st.sidebar:
     st.divider()
 
     api_key = st.text_input("Mistral API Key", type="password", placeholder="your key here")
-    model = st.selectbox(
-        "Model",
-        ["mistral-large-latest", "mistral-small-latest"],
-        index=0,
-    )
+    model = st.selectbox("Model", ["mistral-large-latest", "mistral-small-latest"], index=0)
     top_k = st.slider("Chunks per retrieval", 3, 10, 5)
 
     if api_key:
         os.environ["MISTRAL_API_KEY"] = api_key
         st.session_state["mistral_api_key"] = api_key
-        # Create live objects (kept outside session_state)
+        st.session_state["model"] = model
         _get_store_and_agent()
         st.success("✓ Connected to Mistral", icon="🔑")
 
     st.divider()
     st.markdown("**Agent Tools Available**")
-    TOOL_LABELS = [
-        "search_document_a", "search_document_b",
-        "compare_topic", "find_conflicts",
-        "find_common_ground", "get_document_overview",
-    ]
-    for t in TOOL_LABELS:
+    for t in ["search_document_a", "search_document_b", "compare_topic",
+              "find_conflicts", "find_common_ground", "get_document_overview"]:
         st.markdown(f"<span class='tool-chip'>{t}</span>", unsafe_allow_html=True)
 
     st.divider()
-    st.markdown("<p style='font-size:11px;color:#2a3050;'>Built by Maaz · AI Eng Portfolio</p>",
+    st.markdown("<p style='font-size:11px;color:#2a3050;'>Built by Maaz Ali · AI Eng Portfolio</p>",
                 unsafe_allow_html=True)
 
 
-# ── Header ─────────────────────────────────────────────────────────────────────
+# ── Header ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <h1 style='color:#c0d4f8;margin-bottom:2px;font-size:1.9rem;'>🤖 AI Document Comparison Agent</h1>
 <p style='color:#3a5080;margin-top:0;font-size:13px;'>
@@ -226,7 +212,7 @@ Agentic RAG · The AI autonomously decides what to search, how many times, and h
 st.divider()
 
 
-# ── Upload columns ─────────────────────────────────────────────────────────────
+# ── Upload ────────────────────────────────────────────────────────────────────
 def ingest_pdf(file, doc_key: str):
     store, agent = _get_store_and_agent()
     pdf_bytes = file.read()
@@ -239,7 +225,6 @@ def ingest_pdf(file, doc_key: str):
     st.session_state[f"{doc_key}_name"] = file.name
     st.session_state[f"{doc_key}_meta"] = meta
 
-    # Re-configure tools with latest store + names
     agent.configure(
         store,
         st.session_state["doc_a_name"],
@@ -294,7 +279,7 @@ with col_b:
 st.divider()
 
 
-# ── Query ──────────────────────────────────────────────────────────────────────
+# ── Query ─────────────────────────────────────────────────────────────────────
 st.markdown("### 💬 Ask the Agent")
 
 SUGGESTIONS = [
@@ -332,10 +317,9 @@ if not both_ready:
     st.info("Upload both PDFs above to activate the agent.", icon="⬆️")
 
 
-# ── Agent execution with live step rendering ───────────────────────────────────
+# ── Agent execution ───────────────────────────────────────────────────────────
 if run and query and both_ready:
     store, agent = _get_store_and_agent()
-    # Re-configure in case top_k changed
     agent.configure(
         store,
         st.session_state["doc_a_name"],
@@ -344,16 +328,11 @@ if run and query and both_ready:
     )
 
     st.markdown("---")
-    st.markdown(
-        "<span class='badge badge-agent'>🤖 Agent Reasoning</span>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("<span class='badge badge-agent'>🤖 Agent Reasoning</span>", unsafe_allow_html=True)
 
     steps_container = st.container()
-    final_placeholder = st.empty()
     collected_steps = []
     final_answer = ""
-
     tool_call_count = 0
 
     with steps_container:
@@ -366,7 +345,6 @@ if run and query and both_ready:
                     f"<div class='step-thought'>🤔 <b>Thinking:</b> {step['content']}</div>",
                     unsafe_allow_html=True,
                 )
-
             elif t == "tool_call":
                 tool_call_count += 1
                 st.markdown(
@@ -376,36 +354,25 @@ if run and query and both_ready:
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-
             elif t == "observation":
                 preview = step["content"][:400] + ("…" if len(step["content"]) > 400 else "")
                 st.markdown(
                     f"<div class='step-obs'>👁 {preview}</div>",
                     unsafe_allow_html=True,
                 )
-
             elif t == "final":
                 final_answer = step["content"]
-
             elif t == "error":
                 st.markdown(
                     f"<div class='step-error'>❌ Error: {step['content']}</div>",
                     unsafe_allow_html=True,
                 )
 
-    # Display final answer
     if final_answer:
-        st.markdown(
-            "<span class='badge badge-ok'>✅ Final Answer</span>",
-            unsafe_allow_html=True,
-        )
+        st.markdown("<span class='badge badge-ok'>✅ Final Answer</span>", unsafe_allow_html=True)
         formatted = final_answer.replace("\n", "<br>")
-        st.markdown(
-            f"<div class='final-answer'>{formatted}</div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown(f"<div class='final-answer'>{formatted}</div>", unsafe_allow_html=True)
 
-        # Save to history
         st.session_state["history"].insert(0, {
             "query": query,
             "answer": final_answer,
@@ -415,7 +382,7 @@ if run and query and both_ready:
         st.session_state["current_query"] = ""
 
 
-# ── History ────────────────────────────────────────────────────────────────────
+# ── History ───────────────────────────────────────────────────────────────────
 if st.session_state["history"]:
     st.markdown("---")
     with st.expander(

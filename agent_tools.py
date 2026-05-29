@@ -1,8 +1,10 @@
 """
 agent_tools.py  ·  6 LangChain tools for intelligent document comparison.
 
-The agent autonomously decides which tools to call, in what order, and
-how many times — enabling multi-step reasoning far beyond simple RAG.
+FIXES applied:
+  1. get_document_overview now handles filename inputs gracefully
+     (agent sometimes passes filename instead of 'doc_a'/'doc_b')
+  2. Robust doc_key resolution with fallback matching
 
 Tools:
   1. search_document_a      → semantic search in Document A
@@ -19,9 +21,8 @@ from langchain_core.tools import tool
 from vector_store import VectorStoreManager
 
 # ── Registry ───────────────────────────────────────────────────────────────── #
-# Populated at runtime after PDFs are ingested.
 _registry: dict = {
-    "store": None,       # VectorStoreManager instance
+    "store": None,
     "name_a": "Doc A",
     "name_b": "Doc B",
     "top_k": 5,
@@ -40,6 +41,51 @@ def _store() -> VectorStoreManager:
     if _registry["store"] is None:
         raise RuntimeError("Tools not configured — call configure_tools() first.")
     return _registry["store"]
+
+
+def _resolve_doc_key(raw: str) -> str | None:
+    """
+    FIX: Robustly map any input to 'doc_a' or 'doc_b'.
+
+    The agent sometimes passes:
+      - Correct keys:   'doc_a', 'doc_b'
+      - Filenames:      'Maaz_Ali_Resume.pdf', 'MaazAli_CV.pdf'
+      - Labels:         'Document A', 'document b', 'a', 'b'
+      - Numbers:        '1', '2'
+
+    Returns 'doc_a', 'doc_b', or None if unresolvable.
+    """
+    if not raw:
+        return None
+
+    cleaned = raw.strip().lower()
+
+    # Direct match
+    if cleaned in ("doc_a", "doc_b"):
+        return cleaned
+
+    # Single letter / number
+    if cleaned in ("a", "1", "document a", "document_a", "doca"):
+        return "doc_a"
+    if cleaned in ("b", "2", "document b", "document_b", "docb"):
+        return "doc_b"
+
+    # Filename match against registered names
+    name_a = _registry["name_a"].lower()
+    name_b = _registry["name_b"].lower()
+
+    if cleaned in name_a or name_a in cleaned:
+        return "doc_a"
+    if cleaned in name_b or name_b in cleaned:
+        return "doc_b"
+
+    # Heuristic: if input contains 'a' before 'b' or ends with 'a'
+    if cleaned.endswith("_a") or cleaned.endswith("-a"):
+        return "doc_a"
+    if cleaned.endswith("_b") or cleaned.endswith("-b"):
+        return "doc_b"
+
+    return None
 
 
 # ── Tool 1: Search Document A ──────────────────────────────────────────────── #
@@ -143,7 +189,6 @@ def find_conflicts(
     name_a, name_b = _registry["name_a"], _registry["name_b"]
     k = _registry["top_k"]
 
-    # Use multiple angle queries to surface contradictions
     conflict_queries = [
         topic,
         f"NOT {topic}",
@@ -155,7 +200,7 @@ def find_conflicts(
     all_a, all_b = [], []
     seen_a, seen_b = set(), set()
 
-    for q in conflict_queries[:3]:  # top 3 angles
+    for q in conflict_queries[:3]:
         for d in vs.search("doc_a", q, k=3):
             if d.page_content not in seen_a:
                 all_a.append(d)
@@ -167,7 +212,7 @@ def find_conflicts(
 
     result = [f"=== CONFLICT ANALYSIS: '{topic}' ===\n"]
     result.append(
-        "NOTE: The following excerpts have been retrieved with conflict-detection queries.\n"
+        "NOTE: Excerpts retrieved with conflict-detection queries.\n"
         "Look for statements that directly oppose each other.\n"
     )
 
@@ -237,33 +282,41 @@ def find_common_ground(
 
 @tool
 def get_document_overview(
-    doc_key: Annotated[str, "Which document to summarise: must be exactly 'doc_a' or 'doc_b'"]
+    doc_key: Annotated[str, "Which document to summarise: 'doc_a' or 'doc_b'. Also accepts document filenames or labels like 'Document A'."]
 ) -> str:
     """
-    Get a broad overview of a document by sampling key sections.
-    Use this at the START of an analysis to understand what each document
-    is about before diving into specific comparisons. Also useful when the user
-    asks 'what does document X cover?' or 'what is the scope of document Y?'
-    doc_key must be exactly 'doc_a' or 'doc_b'.
+    Get a broad overview of a document by sampling key sections and returning metadata.
+    Use this at the START of every analysis to understand what each document is about
+    before diving into specific comparisons.
+
+    Accepts: 'doc_a', 'doc_b', document filenames, or labels like 'Document A' / 'Document B'.
     """
     vs = _store()
-    if doc_key not in ("doc_a", "doc_b"):
-        return "Invalid doc_key. Must be 'doc_a' or 'doc_b'."
 
+    # FIX: Robustly resolve whatever the agent passes in
+    resolved = _resolve_doc_key(doc_key)
+    if resolved is None:
+        # Last resort: try to infer from registry names
+        return (
+            f"Could not identify document from input: '{doc_key}'.\n"
+            f"Please use 'doc_a' for [{_registry['name_a']}] "
+            f"or 'doc_b' for [{_registry['name_b']}]."
+        )
+
+    doc_key = resolved
     name = _registry["name_a"] if doc_key == "doc_a" else _registry["name_b"]
     meta = vs.meta(doc_key)
 
-    # Broad sweep queries to surface the doc's main topics
     overview_queries = [
-        "main topic introduction overview",
+        "main topic introduction overview summary",
         "key findings conclusions results",
-        "methodology approach methods",
-        "recommendations implications",
+        "methodology approach methods used",
+        "recommendations implications next steps",
     ]
 
     result = [
         f"=== DOCUMENT OVERVIEW: [{name}] ===",
-        f"Pages: {meta.get('page_count', '?')} | Chunks indexed: {meta.get('chunk_count', '?')}\n",
+        f"Pages: {meta.get('page_count', 'unknown')} | Chunks indexed: {meta.get('chunk_count', 'unknown')}\n",
     ]
 
     seen = set()
@@ -271,8 +324,12 @@ def get_document_overview(
         docs = vs.search(doc_key, q, k=2)
         for d in docs:
             if d.page_content not in seen:
-                result.append(f"[Page {d.metadata.get('page','?')}] {d.page_content[:300]}...")
+                page = d.metadata.get("page", "?")
+                result.append(f"[Page {page}] {d.page_content[:350]}...")
                 seen.add(d.page_content)
+
+    if len(result) == 2:
+        result.append("(No content could be retrieved — document may not be indexed yet.)")
 
     return "\n".join(result)
 
