@@ -12,3 +12,6 @@ __pycache__/
 
 # Generated dump file
 full_project_dump.txt
+
+# Chroma vector store
+chroma_store/
