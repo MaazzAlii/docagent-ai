@@ -1,0 +1,14 @@
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Streamlit and IDE artifacts
+.python-version
+.env
+
+# Generated dump file
+full_project_dump.txt
