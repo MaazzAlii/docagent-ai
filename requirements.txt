@@ -9,11 +9,14 @@ langchain-chroma>=0.1.4
 # LangGraph (ReAct agent)
 langgraph>=0.2.0
 
-# Vector DB — FIX: was pinned to ancient 0.3.25 which conflicts with langchain-chroma
+# Vector DB — FIX: was pinned to ancient 0.3.25
 chromadb>=0.5.0,<0.6.0
 
-# PDF parsing
+# PDF parsing — TWO libraries:
+# pdfplumber: fast text extraction for normal PDFs
+# PyMuPDF (fitz): renders image-based PDF pages for Vision LLM
 pdfplumber>=0.11.0
+pymupdf>=1.24.0
 
-# Mistral SDK (used by langchain-mistralai internally)
+# Mistral SDK — handles both embeddings + vision (pixtral-12b)
 mistralai>=1.0.0

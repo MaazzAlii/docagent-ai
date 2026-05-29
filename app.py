@@ -5,7 +5,7 @@ Run:  streamlit run app.py
 
 import os
 import streamlit as st
-from pdf_processor import extract_langchain_docs
+from pdf_processor import extract_langchain_docs, extraction_summary
 from vector_store import VectorStoreManager
 from agent import DocumentComparisonAgent
 
@@ -214,16 +214,39 @@ st.divider()
 
 # ── Upload ────────────────────────────────────────────────────────────────────
 def ingest_pdf(file, doc_key: str):
+    """
+    Smart ingestion with automatic vision fallback.
+    Works on: normal text PDFs, designed CVs, scanned docs, handwritten notes.
+    """
     store, agent = _get_store_and_agent()
+    api_key = st.session_state.get("mistral_api_key") or os.environ.get("MISTRAL_API_KEY")
     pdf_bytes = file.read()
-    with st.spinner(f"Embedding {file.name}…"):
-        docs = extract_langchain_docs(pdf_bytes, doc_key)
+
+    with st.spinner(f"📖 Reading {file.name}…"):
+        docs = extract_langchain_docs(pdf_bytes, doc_key, api_key=api_key)
+        summary = extraction_summary(docs)
+
+    methods = summary.get("methods", {})
+    vision_pages = methods.get("vision", 0)
+    text_pages   = methods.get("text", 0)
+
+    if summary["total_chunks"] == 0:
+        st.error("❌ Could not read this PDF. Make sure your Mistral API key is entered (needed for image-based PDFs).")
+        return 0
+    elif vision_pages > 0 and text_pages == 0:
+        st.info(f"🤖 Image-based PDF detected — AI Vision read it automatically. Extracted {summary['total_chunks']} sections.", icon="🔍")
+    elif vision_pages > 0:
+        st.info(f"🤖 Mixed PDF: {text_pages} text pages + {vision_pages} image pages read via AI Vision. Total: {summary['total_chunks']} sections.", icon="🔍")
+
+    with st.spinner(f"⚡ Indexing {summary['total_chunks']} sections…"):
         n = store.ingest(doc_key, docs, file.name)
         meta = store.meta(doc_key)
+        meta["vision_pages"] = vision_pages
+        meta["text_pages"]   = text_pages
 
     st.session_state[f"{doc_key}_ready"] = True
-    st.session_state[f"{doc_key}_name"] = file.name
-    st.session_state[f"{doc_key}_meta"] = meta
+    st.session_state[f"{doc_key}_name"]  = file.name
+    st.session_state[f"{doc_key}_meta"]  = meta
 
     agent.configure(
         store,
@@ -234,47 +257,54 @@ def ingest_pdf(file, doc_key: str):
     return n
 
 
+def _render_doc_card(doc_key: str, color: str):
+    m    = st.session_state[f"{doc_key}_meta"]
+    name = st.session_state[f"{doc_key}_name"]
+    vision_pages = m.get("vision_pages", 0)
+    if vision_pages > 0:
+        method_badge = "<span style='background:#1a1200;color:#ffcc33;border-radius:4px;padding:1px 7px;font-size:11px;'>🤖 AI Vision</span>"
+    else:
+        method_badge = "<span style='background:#0d2d1a;color:#33cc77;border-radius:4px;padding:1px 7px;font-size:11px;'>📝 Text</span>"
+    st.markdown(f"""<div class='doc-card ready'>
+        <p style='color:{color};margin:0;font-weight:600;'>📄 {name}</p>
+        <p style='color:#2a4060;font-size:12px;margin:4px 0 0;'>
+          {m.get('page_count','?')} pages · {m.get('chunk_count','?')} sections indexed
+        </p>
+        <span class='badge badge-ok'>✓ Ready</span>&nbsp;{method_badge}
+    </div>""", unsafe_allow_html=True)
+
+
 col_a, _, col_b = st.columns([1, 0.06, 1])
 
 with col_a:
     st.markdown("<span class='badge badge-a'>Document A</span>", unsafe_allow_html=True)
     if st.session_state["doc_a_ready"]:
-        m = st.session_state["doc_a_meta"]
-        st.markdown(f"""<div class='doc-card ready'>
-            <p style='color:#4488ff;margin:0;font-weight:600;'>📄 {st.session_state['doc_a_name']}</p>
-            <p style='color:#2a4060;font-size:12px;margin:4px 0 0;'>
-              {m.get('page_count','?')} pages · {m.get('chunk_count','?')} vectors
-            </p>
-            <span class='badge badge-ok'>✓ Indexed</span>
-        </div>""", unsafe_allow_html=True)
-
-    fa = st.file_uploader("Upload Document A", type=["pdf"], key="up_a", label_visibility="collapsed")
+        _render_doc_card("doc_a", "#4488ff")
+    fa = st.file_uploader(
+        "Upload any PDF — text, scanned, or designed CV",
+        type=["pdf"], key="up_a", label_visibility="visible"
+    )
     store, _ = _get_store_and_agent()
     if fa and store and not st.session_state["doc_a_ready"]:
         ingest_pdf(fa, "doc_a")
         st.rerun()
     elif fa and not store:
-        st.warning("Set Mistral API key first.")
+        st.warning("⚠️ Enter your Mistral API key in the sidebar first.")
 
 with col_b:
     st.markdown("<span class='badge badge-b'>Document B</span>", unsafe_allow_html=True)
     if st.session_state["doc_b_ready"]:
-        m = st.session_state["doc_b_meta"]
-        st.markdown(f"""<div class='doc-card ready'>
-            <p style='color:#bb66ff;margin:0;font-weight:600;'>📄 {st.session_state['doc_b_name']}</p>
-            <p style='color:#3a2060;font-size:12px;margin:4px 0 0;'>
-              {m.get('page_count','?')} pages · {m.get('chunk_count','?')} vectors
-            </p>
-            <span class='badge badge-ok'>✓ Indexed</span>
-        </div>""", unsafe_allow_html=True)
-
-    fb = st.file_uploader("Upload Document B", type=["pdf"], key="up_b", label_visibility="collapsed")
+        _render_doc_card("doc_b", "#bb66ff")
+    fb = st.file_uploader(
+        "Upload any PDF — text, scanned, or designed CV",
+        type=["pdf"], key="up_b", label_visibility="visible"
+    )
     store, _ = _get_store_and_agent()
     if fb and store and not st.session_state["doc_b_ready"]:
         ingest_pdf(fb, "doc_b")
         st.rerun()
     elif fb and not store:
-        st.warning("Set Mistral API key first.")
+        st.warning("⚠️ Enter your Mistral API key in the sidebar first.")
 
 st.divider()
 
