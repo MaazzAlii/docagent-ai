@@ -87,6 +87,30 @@ Then in the UI:
 
 ---
 
+## Screenshots
+
+### App landing and document upload
+![DocCompare AI upload screen](assets/1.png)
+*Screenshot of the Streamlit UI showing Mistral API key entry, model selection, and the two PDF uploads (`gpt-4.pdf` and `gpt-5.pdf`).*
+
+### Question input and compare flow
+![Ask your question](assets/2.png)
+*Screenshot of the question panel with suggested prompts, a custom query box, and the `Compare Now` button. This shows the app ready to start document comparison.*
+
+### Live agent analysis progress
+![Document analysis progress](assets/3.png)
+*Screenshot of the analysis stage where the agent reads document structure and begins processing the two uploaded PDFs.*
+
+### Comparison results overview
+![Comparison results](assets/4.png)
+*Screenshot of the top part of the answer screen showing the generated comparison outline and major architectural differences between the documents.*
+
+### Detailed summary and conclusion
+![Detailed summary](assets/5.png)
+*Screenshot of the completed comparison output with the final summary and difference list.*
+
+---
+
 ## File Structure
 
 ```
